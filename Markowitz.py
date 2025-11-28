@@ -62,6 +62,16 @@ class EqualWeightPortfolio:
         """
         TODO: Complete Task 1 Below
         """
+        # Equal weight across all sector ETFs except the excluded one
+        n_assets = len(assets)
+        n_excluded = 1 if self.exclude in df.columns else 0
+        if (n_assets - n_excluded) <= 0:
+            raise ValueError("No investable assets after applying exclusion.")
+        equal_w = 1.0 / (n_assets - n_excluded)
+        # Assign the same weights for all dates (daily rebalance implied by backtest loop)
+        self.portfolio_weights.loc[:, assets] = equal_w
+        # Ensure excluded asset gets zero weight
+        self.portfolio_weights.loc[:, self.exclude] = 0.0
 
         """
         TODO: Complete Task 1 Above
@@ -113,8 +123,20 @@ class RiskParityPortfolio:
         """
         TODO: Complete Task 2 Below
         """
-
-
+        # Rolling inverse-volatility weights
+        ret = df_returns[assets].copy()
+        for i in range(self.lookback + 1, len(df)):
+            window = ret.iloc[i - self.lookback : i]
+            vols = window.std().replace(0, float("inf"))  # avoid divide-by-zero
+            inv_vol = 1.0 / vols
+            if inv_vol.sum() == 0 or not np.isfinite(inv_vol).all():
+                # fallback to equal weight if something is degenerate
+                w = np.repeat(1.0 / len(assets), len(assets))
+            else:
+                w = (inv_vol / inv_vol.sum()).values
+            self.portfolio_weights.loc[df.index[i], assets] = w
+        # zero weight to excluded asset
+        self.portfolio_weights.loc[:, self.exclude] = 0.0
 
         """
         TODO: Complete Task 2 Above
@@ -187,12 +209,14 @@ class MeanVariancePortfolio:
                 """
                 TODO: Complete Task 3 Below
                 """
-
-                # Sample Code: Initialize Decision w and the Objective
-                # NOTE: You can modify the following code
-                w = model.addMVar(n, name="w", ub=1)
-                model.setObjective(w.sum(), gp.GRB.MAXIMIZE)
-
+                # Decision variables: long-only, no leverage
+                w = model.addMVar(n, name="w", lb=0.0, ub=1.0)
+                model.addConstr(w.sum() == 1.0, name="budget")
+                # Objective: maximize w^T mu - (gamma/2) * w^T Sigma w
+                # Using matrix operations supported by gurobipy for QuadExpr
+                quad_term = w @ Sigma @ w
+                lin_term = mu @ w
+                model.setObjective(lin_term - 0.5 * gamma * quad_term, gp.GRB.MAXIMIZE)
                 """
                 TODO: Complete Task 3 Above
                 """
